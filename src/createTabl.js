@@ -12,7 +12,7 @@ require('./models/models');
     console.log('DB connected');
 
     await sequelize.sync();
-    console.loge('Tablets created');
+    console.log('Tablets created');
   } catch (e) {
     console.error('Sync failed:', e);
     process.exitCode = 1;
