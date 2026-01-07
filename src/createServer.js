@@ -10,7 +10,7 @@ function createServer() {
   // Add a routes to the server
   // Return the server (express app)
   const app = express();
-  const { User, Expense } = models;
+  const { User, Expense, Category } = models;
 
   app.use(express.json());
   // #region helpers and validate
@@ -51,6 +51,11 @@ function createServer() {
   async function findExpenseById(id) {
     // eslint-disable-next-line no-return-await
     return await Expense.findByPk(id);
+  }
+
+  async function findCategoryById(id) {
+    // eslint-disable-next-line no-return-await
+    return await Category.findByPk(id);
   }
   // #endregion
 
@@ -178,13 +183,15 @@ function createServer() {
             .split(',')
             .map((s) => s.trim())
             .filter(Boolean)
-          : [categoriesList];
-        /* eslint-enable prettier/prettier */
+          : [categoriesList.trim()].filter(Boolean);
+        /* eslint-disable prettier/prettier */
       }
 
-      where.category = {
-        [Op.in]: categoriesList,
-      };
+      const found = await Category.findAll({
+        where: { name: { [Op.in]: categoriesList } },
+      });
+
+      where.categoryId = { [Op.in]: found.map((c) => c.id) };
     }
 
     if (from !== undefined) {
@@ -209,9 +216,22 @@ function createServer() {
       };
     }
 
-    const expenses = await Expense.findAll({ where });
+    const expenses = await Expense.findAll({
+      where,
+      include: [{ model: Category }],
+    });
 
-    res.json(expenses);
+    res.json(
+      expenses.map((e) => ({
+        id: e.id,
+        userId: e.userId,
+        spentAt: e.spentAt,
+        title: e.title,
+        amount: e.amount,
+        category: e.Category?.name ?? null,
+        note: e.note,
+      })),
+    );
   });
 
   app.post('/expenses', async (req, res) => {
@@ -260,6 +280,11 @@ function createServer() {
       categoryValue = category.trim();
     }
 
+    const [cat] = await Category.findOrCreate({
+      where: { name: categoryValue },
+      defaults: { name: categoryValue },
+    });
+
     if (note !== undefined && note !== null && typeof note !== 'string') {
       return sendBadRequest(res, 'Field "note" must be string');
     }
@@ -297,11 +322,19 @@ function createServer() {
       spentAt: spentAtValue,
       title: title.trim(),
       amount: parsedAmount,
-      category: categoryValue,
+      categoryId: cat.id,
       note: note !== undefined && note !== null ? note : null,
     });
 
-    res.status(201).json(newExpense);
+    res.status(201).json({
+      id: newExpense.id,
+      userId: newExpense.userId,
+      spentAt: newExpense.spentAt,
+      title: newExpense.title,
+      amount: newExpense.amount,
+      category: categoryValue,
+      note: newExpense.note,
+    });
   });
 
   app.get('/expenses/:id', async (req, res) => {
@@ -311,13 +344,23 @@ function createServer() {
       return sendBadRequest(res, 'Invalid id');
     }
 
-    const expense = await findExpenseById(id);
+    const expense = await Expense.findByPk(id, {
+      include: [{ model: Category }],
+    });
 
     if (!expense) {
       return sendNotFound(res, 'Expense not found');
     }
 
-    res.json(expense);
+    res.json({
+      id: expense.id,
+      userId: expense.userId,
+      spentAt: expense.spentAt,
+      title: expense.title,
+      amount: expense.amount,
+      category: expense.Category?.name ?? null,
+      note: expense.note,
+    });
   });
 
   app.patch('/expenses/:id', async (req, res) => {
@@ -370,7 +413,14 @@ function createServer() {
         return sendBadRequest(res, 'Field "category" must be non-empty string');
       }
 
-      expense.category = body.category.trim();
+      const categoryName = body.category.trim();
+
+      const [cat] = await Category.findOrCreate({
+        where: { name: categoryName },
+        defaults: { name: categoryName },
+      });
+
+      expense.categoryId = cat.id;
     }
 
     if (Object.prototype.hasOwnProperty.call(body, 'note')) {
@@ -385,7 +435,19 @@ function createServer() {
 
     await expense.save();
 
-    res.json(expense);
+    const updated = await Expense.findByPk(expense.id, {
+      include: [{ model: Category }],
+    });
+
+    res.json({
+      id: updated.id,
+      userId: updated.userId,
+      spentAt: updated.spentAt,
+      title: updated.title,
+      amount: updated.amount,
+      category: updated.Category?.name ?? null,
+      note: updated.note,
+    });
   });
 
   app.delete('/expenses/:id', async (req, res) => {
@@ -406,6 +468,80 @@ function createServer() {
     res.status(204).send();
   });
   // #endregion
+
+  app.get('/categories', async (req, res) => {
+    const categories = await Category.findAll();
+
+    res.json(categories);
+  });
+
+  app.post('/categories', async (req, res) => {
+    const body = req.body;
+
+    if (!body || typeof body !== 'object') {
+      return sendBadRequest(res, 'Request body is required');
+    }
+
+    const { name } = body;
+
+    if (typeof name !== 'string' || name.trim() === '') {
+      return sendBadRequest(res, 'Field "name" is required');
+    }
+
+    try {
+      const category = await Category.create({ name: name.trim() });
+
+      res.status(201).json(category);
+    } catch (e) {
+      return sendBadRequest(res, 'Category already exists');
+    }
+  });
+
+  app.patch('/categories/:id', async (req, res) => {
+    const id = parseId(req.params.id);
+
+    if (id === null) {
+      return sendBadRequest(res, 'Invalid id');
+    }
+
+    const category = await findCategoryById(id);
+
+    if (!category) {
+      return sendNotFound(res, 'Category not found');
+    }
+
+    const body = req.body;
+
+    if (!body || typeof body !== 'object') {
+      return sendBadRequest(res, 'Request body is required');
+    }
+
+    if (typeof body.name !== 'string' || body.name.trim() === '') {
+      return sendBadRequest(res, 'Field "name" is required');
+    }
+
+    category.name = body.name.trim();
+    await category.save();
+
+    res.json(category);
+  });
+
+  app.delete('/categories/:id', async (req, res) => {
+    const id = parseId(req.params.id);
+
+    if (id === null) {
+      return sendBadRequest(res, 'Invalid id');
+    }
+
+    const category = await findCategoryById(id);
+
+    if (!category) {
+      return sendNotFound(res, 'Category not found');
+    }
+
+    await category.destroy();
+    res.status(204).send();
+  });
 
   return app;
 }

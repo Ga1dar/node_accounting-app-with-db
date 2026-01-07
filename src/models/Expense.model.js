@@ -34,9 +34,9 @@ const Expense = sequelize.define(
       type: DataTypes.INTEGER,
       allowNull: false,
     },
-    category: {
+    categoryId: {
       // eslint-disable-next-line no-undef
-      type: DataTypes.STRING,
+      type: DataTypes.INTEGER,
       allowNull: false,
     },
     note: {
